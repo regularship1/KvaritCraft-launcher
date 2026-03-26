@@ -1,0 +1,4 @@
+pillow
+opencv-python
+tomli_w
+minecraft_launcher_lib
