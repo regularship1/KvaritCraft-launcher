@@ -1,25 +1,29 @@
-import json
 import os
+import shutil
 import subprocess
 from pathlib import Path
 import sys
 import tkinter
 import tomllib
 from threading import Thread
-from tkinter.ttk import Frame, Button, Scale, Label, Checkbutton, Notebook
+from tkinter.filedialog import askdirectory
+from tkinter.scrolledtext import ScrolledText
+from tkinter.simpledialog import askstring
+from tkinter.ttk import Frame, Button, Scale, Label, Checkbutton, Notebook, Progressbar
+from zipfile import ZipFile
 import minecraft_launcher_lib
+import requests
 import tomli_w
-
 SRC = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(SRC)
 import cv2
 import hashlib
 import uuid
 from PIL import Image, ImageTk
-from tkinter.messagebox import showerror
-from tkinter import Label as tkLabel, Tk, Text, IntVar, BooleanVar
+from tkinter.messagebox import showerror, askyesno
+from tkinter import Label as tkLabel, Tk, IntVar, BooleanVar
 from regularlib import TkAddon
-VERSION = "1.0-alpha 5"
+VERSION = "1.0.2"
 
 def offline_uuid(name):
     data = ("OfflinePlayer:" + name).encode("utf-8")
@@ -34,7 +38,10 @@ cfgFP = laucherootFP / "config.toml"
 
 if not laucherootFP.exists(): laucherootFP.mkdir(parents=True)
 
-if not cfgFP.exists(): cfgFP.write_text(tomli_w.dumps(dict(instancedir=r"D:\Temp\kvaritcraft", instancemem=4, instancequickplay=True, instancefullscreen=True, launchvanila=True, playernick="regularship1")), encoding="utf-8")
+if not cfgFP.exists():
+    nick = ""
+    while nick == "": nick = askstring("Ваш ник", "Введите ваш внутриигровой ник")
+    cfgFP.write_text(tomli_w.dumps(dict(instancedir=str(laucherootFP / ".minecraft"), instancemem=8, instancequickplay=True, instancefullscreen=True, launchvanila=False, playanimation=True, playernick=nick)), encoding="utf-8")
 config = tomllib.load(cfgFP.open("rb"))
 
 instanceFP = Path(config["instancedir"])
@@ -53,13 +60,21 @@ def liftFrameUp(frame, y=720):
     else: frame.place(x=0, y=720)
     if y == 720: frame.lift()
 
+def changeInstanceDir():
+    newdir = askdirectory(title="Выберите папку", initialdir=config["instancedir"])
+    move = askyesno("Переместить из старой папки?", "Переместить клиент из старой папки в новоую?(Все данные сохранятся)")
+    if move: shutil.copy2(config["instancedir"], newdir)
+    config["instancedir"] = newdir
+    cfgFP.write_text(tomli_w.dumps(config))
+
 def mainloop():
-    global mainscreen, settings, console, mccon, constd
+    global mainscreen, settings, console, mccon, constd, consoles, progressbar, mcProgressframe, progresstext, progressdesc
     bgphoto = tkinter.PhotoImage(file=os.path.join(SRC, "assets\\bglogo.png"))
     normalbgphoto = tkinter.PhotoImage(file=os.path.join(SRC, "assets\\bg.png"))
     playbtnicon = tkinter.PhotoImage(file=os.path.join(SRC, "assets\\play.png"))
     settingsbtnicon = tkinter.PhotoImage(file=os.path.join(SRC, "assets\\settings.png"))
     backbtnicon = tkinter.PhotoImage(file=os.path.join(SRC, "assets\\back.png"))
+    conbtnicon = tkinter.PhotoImage(file=os.path.join(SRC, "assets\\console.png"))
     Window.overrideredirect(False)
     Window.attributes("-topmost", False)
     Window.iconbitmap(True, os.path.join(SRC, "assets\\icon.ico"))
@@ -73,43 +88,50 @@ def mainloop():
     console = Frame(tabs, style="DarkCustom.SizeTen.TFrame")
     mainscreen = Frame(tabs, style="DarkCustom.SizeTen.TFrame")
     settings = Frame(tabs, style="DarkCustom.SizeTen.TFrame")
+    mcProgressframe = Frame(tabs, style="DarkCustom.SizeTen.TFrame")
     #console
     consoles = Notebook(console, style="DarkCustom.SizeTen.TNotebook")
     globalconframe = Frame(consoles, style="DarkCustom.SizeTen.TFrame")
-    globalcon = Text(globalconframe, bg="#232423", fg="white", insertbackground="white", state="disabled")
+    globalcon = ScrolledText(globalconframe, bg="#232423", fg="white", insertbackground="white", state="disabled", wrap="word")
+    #globalcon.vbar.config(bg="#171716", )
     globalcon.pack(expand=True, fill="both")
     class constd:
         def __init__(self, con): self.con = con
         def write(self, text):
+            autoscroll = self.con.yview()[1] >= 0.999
             self.con.config(state="normal")
             self.con.insert("end", text)
             self.con.config(state="disabled")
-            if self.con.yview()[1] >= 0.999: self.con.see("end")
+            if autoscroll: self.con.see("end")
         def flush(self): pass
     sys.stdout = constd(globalcon)
     sys.stderr = constd(globalcon)
     consoles.add(globalconframe, text="Лаунчер")
     mcconframe = Frame(consoles, style="DarkCustom.SizeTen.TFrame")
-    mccon = Text(mcconframe, bg="#232423", fg="white", insertbackground="white", state="disabled")
+    mccon = ScrolledText(mcconframe, bg="#232423", fg="white", insertbackground="white", state="disabled", wrap="word")
     mccon.pack(expand=True, fill="both")
     consoles.add(mcconframe, text="Майнкрафт")
     consoles.place(x=0, y=0, relwidth=1, relheight=1)
-    contomain = Button(console, image=backbtnicon, style="DarkCustom.SizeTen.TButton", command=lambda: liftFrameDown(mainscreen), cursor="hand2")
-    contomain.image = backbtnicon
-    contomain.place(x=0, y=630)
+    conback = Button(console, image=backbtnicon, style="DarkCustom.SizeTen.TButton", command=lambda: console.lower(), cursor="hand2")
+    conback.image = backbtnicon
+    conback.place(x=0, y=630)
     console.place(x=0, y=0, relwidth=1, relheight=1)
     print("Привет! Я Мита!")
     #mainscreen
     bg = tkLabel(mainscreen, image=bgphoto, bg="white")
     bg.image = bgphoto
     bg.place(x=0, y=0, relwidth=1, relheight=1)
-    play = Button(mainscreen, style="DarkCustom.SizeTen.TButton", image=playbtnicon, cursor="hand2", command=launchinstance)
+    play = Button(mainscreen, style="DarkCustom.SizeTen.TLabel", image=playbtnicon, cursor="hand2")
+    play.bind("<Button-1>", lambda _: Thread(target=launchinstance, daemon=True).start())
     play.image = playbtnicon
     play.place(x=200, y=300)
-    gosettings = Button(mainscreen, image=settingsbtnicon, style="DarkCustom.SizeTen.TButton", command=lambda: liftFrameDown(settings), cursor="hand2")
+    gosettings = Label(mainscreen, image=settingsbtnicon, style="DarkCustom.SizeTen.TLabel", cursor="hand2")
     gosettings.image = settingsbtnicon
+    gosettings.bind("<Button-1>", lambda _: liftFrameDown(settings))
     gosettings.place(x=200, y=400)
-    goconsole = Button(mainscreen, text="Консоль", style="DarkCustom.SizeTen.TButton", command=lambda: liftFrameDown(console), cursor="hand2")
+    goconsole = Label(mainscreen, image=conbtnicon, style="DarkCustom.SizeTen.TLabel", cursor="hand2")
+    goconsole.image = conbtnicon
+    goconsole.bind("<Button-1>", lambda _: liftFrameDown(console))
     goconsole.place(x=200, y=500)
     mainscreen.place(x=0, y=0, relwidth=1, relheight=1)
     mainscreen.lift()
@@ -139,9 +161,9 @@ def mainloop():
     settingsClientFull.place(x=700, y=60)
     settingsClientFullabel = Label(settingsframe, style="DarkCustom.SizeTen.TLabel", text="Запускать клиент в полном экране")
     settingsClientFullabel.place(x=300, y=60)
-    settingsChangeClientPath = Button(settingsframe, style="DarkCustom.SizeTen.TButton", text="Сменить", cursor="hand2")
+    settingsChangeClientPath = Button(settingsframe, style="DarkCustom.SizeTen.TButton", text="Сменить", cursor="hand2", command=changeInstanceDir)
     settingsChangeClientPath.place(x=700, y=90)
-    settingsShowClientPath = Button(settingsframe, style="DarkCustom.SizeTen.TButton", text="Показать", cursor="hand2")
+    settingsShowClientPath = Button(settingsframe, style="DarkCustom.SizeTen.TButton", text="Показать", cursor="hand2", command=lambda: os.startfile(config["instancedir"]))
     settingsShowClientPath.place(x=820, y=90)
     settingsChangeClientPathLbl = Label(settingsframe, style="DarkCustom.SizeTen.TLabel", text="Место установки")
     settingsChangeClientPathLbl.place(x=300, y=95)
@@ -167,21 +189,73 @@ def mainloop():
     gomainscreen.image = backbtnicon
     gomainscreen.place(x=10, y=10)
     settings.place(x=0, y=0, relwidth=1, relheight=1)
+    #progress
+    bg = tkLabel(mcProgressframe, image=normalbgphoto, bg="white")
+    bg.image = normalbgphoto
+    bg.place(x=0, y=0, relwidth=1, relheight=1)
+    progresstext = Label(mcProgressframe, style="DarkCustom.SizeTen.TLabel")
+    progresstext.place(relx=0.5, y=270, anchor="n")
+    progressdesc = Label(mcProgressframe, style="DarkCustom.SizeTen.TLabel")
+    progressdesc.place(relx=0.5, y=300, anchor="n")
+    progressbar = Progressbar(mcProgressframe, style="DarkCustom.Horizontal.TProgressbar")
+    progressbar.place(relx=0.5, y=330, anchor="n", width=200, height=40)
+    goconsole = Label(mcProgressframe, image=conbtnicon, style="DarkCustom.SizeTen.TLabel", cursor="hand2")
+    goconsole.image = conbtnicon
+    goconsole.bind("<Button-1>", lambda _: liftFrameDown(console))
+    goconsole.place(x=0, y=0)
+    mcProgressframe.place(x=0, y=0, relwidth=1, relheight=1)
 
 def installinstance():
-    minecraft_launcher_lib.install.install_minecraft_version(
-        "1.20.1",
-        config["instancedir"]
-    )
-
-def MCconThread(**kwargs):
-    proc = subprocess.Popen(**kwargs)
-    mcstd = constd(mccon)
-    for line in proc.stdout:
-        print(line, file=mcstd, end="")
+    def set_status(status): progressdesc["text"] = status
+    def set_progress(progress): progressbar["value"] = progress
+    def set_max(new_max): progressbar["max"] = new_max
+    if "1.20.1" not in {v["id"] for v in minecraft_launcher_lib.utils.get_installed_versions(config["instancedir"])}:
+        while True:
+            try:
+                progresstext["text"] = "Установка 1.20.1"
+                minecraft_launcher_lib.install.install_minecraft_version("1.20.1", config["instancedir"], callback={"setProgress": set_progress, "setMax": set_max, "setStatus": set_status})
+            except BaseException as e:
+                print(e)
+                continue
+            break
+    if "1.20.1-forge-47.4.10" not in {v["id"] for v in minecraft_launcher_lib.utils.get_installed_versions(config["instancedir"])}:
+        while True:
+            try:
+                progresstext["text"] = "Установка Forge"
+                minecraft_launcher_lib.forge.install_forge_version("1.20.1-47.4.10", config["instancedir"], callback={"setProgress": set_progress, "setMax": set_max, "setStatus": set_status})
+            except BaseException as e:
+                print(e)
+                continue
+            break
+    if not os.path.exists(os.path.join(config["instancedir"], "mods")) or not os.listdir(os.path.join(config["instancedir"], "mods")):
+        progresstext["text"] = "Скачивание модов"
+        while True:
+            try:
+                with requests.get("http://155.212.208.63:5000/static/files/mods.zip", stream=True) as r:
+                    r.raise_for_status()
+                    progressbar["max"] = r.headers.get("Content-Length")
+                    with open(os.path.join(os.getenv("LOCALAPPDATA"), "Temp", "mods.zip"), "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1048576):
+                            if chunk:
+                                f.write(chunk)
+                                progressbar["value"] += 1048576
+            except BaseException as e:
+                print(e)
+                continue
+            break
+        progresstext["text"] = "Распаковывание"
+        progressdesc["text"] = ""
+        progressbar["value"] = 100
+        progressbar["max"] = 100
+        with ZipFile(os.path.join(os.getenv("LOCALAPPDATA"), "Temp", "mods.zip"), "r") as z: z.extractall(config["instancedir"])
 
 def launchinstance():
-    print("launching kvaritcraft")
+    print("Запуск kvaritcraft")
+    liftFrameDown(mcProgressframe)
+    installinstance()
+    mainscreen.lift()
+    liftFrameDown(console)
+    consoles.select(1)
     cmd = minecraft_launcher_lib.command.get_minecraft_command(
         "1.20.1" if config["launchvanila"] else "1.20.1-forge-47.4.10",
         config["instancedir"],
@@ -189,17 +263,13 @@ def launchinstance():
             "username": config["playernick"],
             "uuid": str(offline_uuid(config["playernick"])),
             "token": "",
-            "jvmArguments": ["-Xmx4G", "-Xms2G"],
+            "jvmArguments": [f"-Xmx{config["instancemem"]}G", "-Xms2G"],
         }
     )
     if config["instancequickplay"]: cmd += ["--quickPlayMultiplayer", "kvaritcraft.mclan.ru"]
-    Thread(target=MCconThread, kwargs={
-        "args": cmd,
-        "cwd": config["instancedir"],
-        "stdout":subprocess.PIPE,
-        "stderr":subprocess.STDOUT,
-        "text": True,
-    }).start()
+    proc = subprocess.Popen(**{"args": cmd, "cwd": config["instancedir"], "stdout":subprocess.PIPE, "stderr":subprocess.STDOUT, "text": True,})
+    mcstd = constd(mccon)
+    for line in proc.stdout: print(line, file=mcstd, end="")
 
 Window = Tk()
 Window.focus_force()
@@ -239,8 +309,11 @@ def vidnext():
 def skipsplash(_):
     global vidskip
     vidskip = True
+    config["playanimation"] = False
+    cfgFP.write_text(tomli_w.dumps(config))
 
 vidplayer.bind("<Button-1>", skipsplash)
-#Window.after(0, vidnext)
-Window.after(0, mainloop)
+if config["playanimation"]: Window.after(0, vidnext)
+else: Window.after(0, mainloop)
 Window.mainloop()
+sys.exit()
