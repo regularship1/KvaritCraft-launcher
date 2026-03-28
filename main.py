@@ -14,16 +14,16 @@ from zipfile import ZipFile
 import minecraft_launcher_lib
 import requests
 import tomli_w
-SRC = os.path.dirname(os.path.abspath(__file__))
-sys.path.append(SRC)
 import cv2
 import hashlib
 import uuid
 from PIL import Image, ImageTk
-from tkinter.messagebox import showerror, askyesno
+from tkinter.messagebox import showerror, askyesno, showinfo
 from tkinter import Label as tkLabel, Tk, IntVar, BooleanVar
+SRC = os.path.dirname(os.path.abspath(__file__))
+sys.path.append(SRC)
 from regularlib import TkAddon
-VERSION = "1.0.2"
+VERSION = "1.0.3"
 
 def offline_uuid(name):
     data = ("OfflinePlayer:" + name).encode("utf-8")
@@ -32,6 +32,45 @@ def offline_uuid(name):
     b[6] = (b[6] & 0x0F) | 0x30
     b[8] = (b[8] & 0x3F) | 0x80
     return uuid.UUID(bytes=bytes(b))
+
+def checkupdates():
+    liftFrameDown(mcProgressframe)
+    progresstext["text"] = "Проверка обновлений"
+    progressdesc["text"] = "Downloading updates.toml"
+    while True:
+        try:
+            with requests.get("https://raw.githubusercontent.com/regularship1/KvaritCraft-launcher/refs/heads/main/updates.toml", stream=True) as r:
+                r.raise_for_status()
+                progressbar["max"] = r.headers.get("Content-Length")
+                with open(str(temp / "updates.toml"), "wb") as f:
+                    for chunk in r.iter_content(chunk_size=1048576):
+                        if chunk:
+                            f.write(chunk)
+                            progressbar["value"] += len(chunk)
+        except BaseException as e:
+            print(e)
+            continue
+        break
+    updates = tomllib.load((temp / "updates.toml").open("rb"))
+    if VERSION != updates["laucher_version"]:
+        progressdesc["text"] = "Downloading Kvaritcraft.exe"
+        while True:
+            try:
+                with requests.get(f"https://github.com/regularship1/KvaritCraft-launcher/releases/download/{updates["laucher_version"]}/Kvaritcraft.exe", stream=True) as r:
+                    r.raise_for_status()
+                    progressbar["max"] = r.headers.get("Content-Length")
+                    with open(sys.executable, "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1048576):
+                            if chunk:
+                                f.write(chunk)
+                                progressbar["value"] += len(chunk)
+            except BaseException as e:
+                print(e)
+                continue
+            break
+        showinfo("Лаунчер обновился", f"Лаунчер обновился до версии {updates["laucher_version"]}. При следующем запуске вы запустите новую версию")
+
+if os.path.basename(sys.executable) not in ("pythonw.exe", "python.exe"): checkupdates()
 
 laucherootFP = Path(os.getenv("APPDATA")) / "regularship1" / "kvaritcraft6"
 cfgFP = laucherootFP / "config.toml"
@@ -45,6 +84,7 @@ if not cfgFP.exists():
 config = tomllib.load(cfgFP.open("rb"))
 
 instanceFP = Path(config["instancedir"])
+temp = Path(os.getenv("LOCALAPPDATA")) / "Temp"
 
 def liftFrameDown(frame, y=-750):
     if y < 0:
@@ -206,51 +246,57 @@ def mainloop():
     mcProgressframe.place(x=0, y=0, relwidth=1, relheight=1)
 
 def installinstance():
-    def set_status(status): progressdesc["text"] = status
-    def set_progress(progress): progressbar["value"] = progress
-    def set_max(new_max): progressbar["max"] = new_max
     if "1.20.1" not in {v["id"] for v in minecraft_launcher_lib.utils.get_installed_versions(config["instancedir"])}:
+        progresstext["text"] = "Установка майнкрафта"
+        progressdesc["text"] = "Downloading minecraft.zip"
         while True:
             try:
-                progresstext["text"] = "Установка 1.20.1"
-                minecraft_launcher_lib.install.install_minecraft_version("1.20.1", config["instancedir"], callback={"setProgress": set_progress, "setMax": set_max, "setStatus": set_status})
+                with requests.get("https://drive.usercontent.google.com/download?confirm=t&id=1MZV4I8FYikmPB4KN4Tc6fwIrFpGIkdIo&export=download", stream=True) as r:
+                    r.raise_for_status()
+                    progressbar["max"] = r.headers.get("Content-Length")
+                    with open(str(temp / "minecraft.zip"), "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1048576):
+                            if chunk:
+                                f.write(chunk)
+                                progressbar["value"] += len(chunk)
             except BaseException as e:
                 print(e)
                 continue
             break
-    if "1.20.1-forge-47.4.10" not in {v["id"] for v in minecraft_launcher_lib.utils.get_installed_versions(config["instancedir"])}:
-        while True:
-            try:
-                progresstext["text"] = "Установка Forge"
-                minecraft_launcher_lib.forge.install_forge_version("1.20.1-47.4.10", config["instancedir"], callback={"setProgress": set_progress, "setMax": set_max, "setStatus": set_status})
-            except BaseException as e:
-                print(e)
-                continue
-            break
+        progresstext["text"] = "Установка майнкрафта"
+        progressdesc["text"] = "Unpacking minecraft.zip"
+        progressbar["mode"] = "indeterminate"
+        progressbar.start()
+        with ZipFile(str(temp / "minecraft.zip"), "r") as z: z.extractall(config["instancedir"])
+        progressbar.stop()
+        progressbar["mode"] = "determinate"
     if not os.path.exists(os.path.join(config["instancedir"], "mods")) or not os.listdir(os.path.join(config["instancedir"], "mods")):
-        progresstext["text"] = "Скачивание модов"
+        progresstext["text"] = "Установка модов"
+        progressdesc["text"] = "Downloading mods.zip"
         while True:
             try:
                 with requests.get("http://155.212.208.63:5000/static/files/mods.zip", stream=True) as r:
                     r.raise_for_status()
                     progressbar["max"] = r.headers.get("Content-Length")
-                    with open(os.path.join(os.getenv("LOCALAPPDATA"), "Temp", "mods.zip"), "wb") as f:
+                    with open(str(temp / "mods.zip"), "wb") as f:
                         for chunk in r.iter_content(chunk_size=1048576):
                             if chunk:
                                 f.write(chunk)
-                                progressbar["value"] += 1048576
+                                progressbar["value"] += len(chunk)
             except BaseException as e:
                 print(e)
                 continue
             break
-        progresstext["text"] = "Распаковывание"
-        progressdesc["text"] = ""
-        progressbar["value"] = 100
-        progressbar["max"] = 100
-        with ZipFile(os.path.join(os.getenv("LOCALAPPDATA"), "Temp", "mods.zip"), "r") as z: z.extractall(config["instancedir"])
+        progresstext["text"] = "Установка модов"
+        progressdesc["text"] = "Unpacking mods.zip"
+        progressbar["mode"] = "indeterminate"
+        progressbar.start()
+        with ZipFile(str(temp / "mods.zip"), "r") as z: z.extractall(config["instancedir"])
+        progressbar.stop()
+        progressbar["mode"] = "determinate"
 
 def launchinstance():
-    print("Запуск kvaritcraft")
+    print("Запуск \"Кварц 6\"")
     liftFrameDown(mcProgressframe)
     installinstance()
     mainscreen.lift()
