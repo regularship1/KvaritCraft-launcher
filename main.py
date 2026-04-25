@@ -1,6 +1,8 @@
 import os
 import shutil
 import subprocess
+import time
+import traceback
 from pathlib import Path
 import sys
 import tkinter
@@ -18,12 +20,12 @@ import cv2
 import hashlib
 import uuid
 from PIL import Image, ImageTk
-from tkinter.messagebox import showerror, askyesno, showinfo
+from tkinter.messagebox import showerror, askyesno
 from tkinter import Label as tkLabel, Tk, IntVar, BooleanVar
 SRC = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(SRC)
 from regularlib import TkAddon
-VERSION = "1.0.3"
+VERSION = "1.0.4"
 
 def offline_uuid(name):
     data = ("OfflinePlayer:" + name).encode("utf-8")
@@ -32,6 +34,13 @@ def offline_uuid(name):
     b[6] = (b[6] & 0x0F) | 0x30
     b[8] = (b[8] & 0x3F) | 0x80
     return uuid.UUID(bytes=bytes(b))
+
+def liftFrameDown(frame, y=-750):
+    if y < 0:
+        frame.place(x=0, y=y)
+        Window.after(10, liftFrameDown, frame, y + 30)
+    else: frame.place(x=0, y=0)
+    if y == -750: frame.lift()
 
 def checkupdates():
     liftFrameDown(mcProgressframe)
@@ -47,30 +56,107 @@ def checkupdates():
                         if chunk:
                             f.write(chunk)
                             progressbar["value"] += len(chunk)
-        except BaseException as e:
-            print(e)
+        except BaseException:
+            liftFrameDown(console)
+            traceback.print_exc()
             continue
         break
     updates = tomllib.load((temp / "updates.toml").open("rb"))
-    if VERSION != updates["laucher_version"]:
+    if os.path.basename(sys.executable) not in ("pythonw.exe", "python.exe") and VERSION != updates["launcher_version"] and False:
         progressdesc["text"] = "Downloading Kvaritcraft.exe"
         while True:
             try:
-                with requests.get(f"https://github.com/regularship1/KvaritCraft-launcher/releases/download/{updates["laucher_version"]}/Kvaritcraft.exe", stream=True) as r:
+                with requests.get(f"https://github.com/regularship1/KvaritCraft-launcher/releases/download/Latest/Kvaritcraft.exe", stream=True) as r:
                     r.raise_for_status()
                     progressbar["max"] = r.headers.get("Content-Length")
-                    with open(sys.executable, "wb") as f:
+                    with open(temp / "launcher.exe", "wb") as f:
                         for chunk in r.iter_content(chunk_size=1048576):
                             if chunk:
                                 f.write(chunk)
                                 progressbar["value"] += len(chunk)
-            except BaseException as e:
-                print(e)
+            except BaseException:
+                liftFrameDown(console)
+                traceback.print_exc()
                 continue
             break
-        showinfo("Лаунчер обновился", f"Лаунчер обновился до версии {updates["laucher_version"]}. При следующем запуске вы запустите новую версию")
-
-if os.path.basename(sys.executable) not in ("pythonw.exe", "python.exe"): checkupdates()
+        try:
+            subprocess.Popen(["assets/updatehelper.bat", sys.executable, str(temp / "launcher.exe")], creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP)
+        except BaseException:
+            liftFrameDown(console)
+            traceback.print_exc()
+        sys.exit()
+    version = tomllib.loads((instanceFP / "version.txt").read_text()) if (instanceFP / "version.txt").exists() else {"mc_version": "", "mc_core_version": ""}
+    if version["mc_core_version"] != updates["mc_core_version"]:
+        progresstext["text"] = "Скачивание minecraft"
+        progressdesc["text"] = "Downloading minecraft.zip"
+        while True:
+            try:
+                with requests.get("https://drive.usercontent.google.com/download?confirm=t&id=1MZV4I8FYikmPB4KN4Tc6fwIrFpGIkdIo&export=download", stream=True) as r:
+                    r.raise_for_status()
+                    progressbar["max"] = r.headers.get("Content-Length")
+                    with open(str(temp / "minecraft.zip"), "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1048576):
+                            if chunk:
+                                f.write(chunk)
+                                progressbar["value"] += len(chunk)
+            except BaseException:
+                liftFrameDown(console)
+                traceback.print_exc()
+                continue
+            break
+        time.sleep(1)
+        progresstext["text"] = "Установка майкрафта"
+        progressdesc["text"] = f"Clearing minecraft"
+        try: shutil.rmtree(str(instanceFP))
+        except PermissionError: pass
+        except BaseException:
+            liftFrameDown(console)
+            traceback.print_exc()
+        with ZipFile(str(temp / "minecraft.zip"), "r") as z:
+            files = z.namelist()
+            progressbar["maximum"] = len(files)
+            progressbar["value"] = 0
+            for i, filename in enumerate(files):
+                progressdesc["text"] = f"Unpacking {filename}"
+                z.extract(filename, config["instancedir"])
+                progressbar["value"] = i
+        version["mc_version"] = ""
+    if version["mc_version"] != updates["mc_version"]:
+        progresstext["text"] = "Скачивание модов"
+        progressdesc["text"] = "Downloading mods.zip"
+        while True:
+            try:
+                with requests.get("https://drive.usercontent.google.com/download?confirm=t&id=1yx7EeZOsS_764YDznrGRQiO3uPqNhV8q&export=download", stream=True) as r:
+                    r.raise_for_status()
+                    progressbar["max"] = r.headers.get("Content-Length")
+                    with open(str(temp / "mods.zip"), "wb") as f:
+                        for chunk in r.iter_content(chunk_size=1048576):
+                            if chunk:
+                                f.write(chunk)
+                                progressbar["value"] += len(chunk)
+            except BaseException:
+                liftFrameDown(console)
+                traceback.print_exc()
+                continue
+            break
+        progresstext["text"] = "Установка модов"
+        progressdesc["text"] = f"Clearing mods"
+        try:
+            if (instanceFP / "mods").exists(): shutil.rmtree(str(instanceFP / "mods"))
+        except BaseException:
+            liftFrameDown(console)
+            traceback.print_exc()
+        with ZipFile(str(temp / "mods.zip"), "r") as z:
+            files = z.namelist()
+            progressbar["maximum"] = len(files)
+            progressbar["value"] = 0
+            for i, filename in enumerate(files):
+                if filename.startswith("config/") and (instanceFP / "config").exists(): progressdesc["text"] = f"Skip unpacking {filename}"
+                else:
+                    progressdesc["text"] = f"Unpacking {filename}"
+                    z.extract(filename, config["instancedir"])
+                progressbar["value"] = i
+    liftFrameDown(mainscreen)
 
 laucherootFP = Path(os.getenv("APPDATA")) / "regularship1" / "kvaritcraft6"
 cfgFP = laucherootFP / "config.toml"
@@ -79,19 +165,12 @@ if not laucherootFP.exists(): laucherootFP.mkdir(parents=True)
 
 if not cfgFP.exists():
     nick = ""
-    while nick == "": nick = askstring("Ваш ник", "Введите ваш внутриигровой ник")
+    while nick == "": nick = askstring("Ваш ник", "Введите ваш внутриигровой ник (с ним вы зайдёте на сервер)")
     cfgFP.write_text(tomli_w.dumps(dict(instancedir=str(laucherootFP / ".minecraft"), instancemem=8, instancequickplay=True, instancefullscreen=True, launchvanila=False, playanimation=True, playernick=nick)), encoding="utf-8")
 config = tomllib.load(cfgFP.open("rb"))
 
 instanceFP = Path(config["instancedir"])
 temp = Path(os.getenv("LOCALAPPDATA")) / "Temp"
-
-def liftFrameDown(frame, y=-750):
-    if y < 0:
-        frame.place(x=0, y=y)
-        Window.after(10, liftFrameDown, frame, y + 30)
-    else: frame.place(x=0, y=0)
-    if y == -750: frame.lift()
 
 def liftFrameUp(frame, y=720):
     if y > 0:
@@ -103,7 +182,21 @@ def liftFrameUp(frame, y=720):
 def changeInstanceDir():
     newdir = askdirectory(title="Выберите папку", initialdir=config["instancedir"])
     move = askyesno("Переместить из старой папки?", "Переместить клиент из старой папки в новоую?(Все данные сохранятся)")
-    if move: shutil.copy2(config["instancedir"], newdir)
+    if move:
+        liftFrameDown(mcProgressframe)
+        total = 0
+        totalfiles = []
+        progresstext["text"] = "Перемещение майкрафта"
+        progressdesc["text"] = "Scanning dirs"
+        for root, _, files in os.walk(config["instancedir"]):
+            for file in files:
+                totalfiles.append(Path(root) / file)
+                total += 1
+        progressbar["max"] = total
+        for file in totalfiles:
+            progressdesc["text"] = f"Moving {file.name}"
+            progressbar["value"] += 1
+            file.move_into(newdir)
     config["instancedir"] = newdir
     cfgFP.write_text(tomli_w.dumps(config))
 
@@ -115,13 +208,7 @@ def mainloop():
     settingsbtnicon = tkinter.PhotoImage(file=os.path.join(SRC, "assets\\settings.png"))
     backbtnicon = tkinter.PhotoImage(file=os.path.join(SRC, "assets\\back.png"))
     conbtnicon = tkinter.PhotoImage(file=os.path.join(SRC, "assets\\console.png"))
-    Window.overrideredirect(False)
     Window.attributes("-topmost", False)
-    Window.iconbitmap(True, os.path.join(SRC, "assets\\icon.ico"))
-    Window.resizable(False, False)
-    Window.configure(background="#171716")
-    Window.geometry(f"1280x720+{Window.winfo_screenwidth() // 2 - 640}+{Window.winfo_screenheight() // 2 - 360}")
-    Window.title(f"KvaritCraft launcher v.{VERSION}")
     #mainFont = Font(font=(TkAddon.FONT, 10))
     tabs = Frame(style="DarkCustom.SizeTen.TFrame")
     tabs.place(x=0, y=0, relwidth=1, relheight=1)
@@ -223,7 +310,7 @@ def mainloop():
     settingsLaunchVanilaVar.trace_add("write", UPDsettingsLaunchVanila)
     settingsLaunchVanila = Checkbutton(settingsframe, style="DarkCustom.SizeTen.TCheckbutton", variable=settingsLaunchVanilaVar, cursor="hand2")
     settingsLaunchVanila.place(x=700, y=155)
-    settingsLaunchVanilaLbl = Label(settingsframe, style="DarkCustom.SizeTen.TLabel", text="Запускать Vanila 1.20.1")
+    settingsLaunchVanilaLbl = Label(settingsframe, style="DarkCustom.SizeTen.TLabel", text="Запускать ванилу")
     settingsLaunchVanilaLbl.place(x=300, y=155)
     gomainscreen = Button(settingsframe, image=backbtnicon, style="DarkCustom.SizeTen.TButton", command=lambda: liftFrameDown(mainscreen), cursor="hand2")
     gomainscreen.image = backbtnicon
@@ -244,9 +331,10 @@ def mainloop():
     goconsole.bind("<Button-1>", lambda _: liftFrameDown(console))
     goconsole.place(x=0, y=0)
     mcProgressframe.place(x=0, y=0, relwidth=1, relheight=1)
+    checkupdates()
 
 def installinstance():
-    if "1.20.1" not in {v["id"] for v in minecraft_launcher_lib.utils.get_installed_versions(config["instancedir"])}:
+    if not (instanceFP / "version.txt").exists():
         progresstext["text"] = "Установка майнкрафта"
         progressdesc["text"] = "Downloading minecraft.zip"
         while True:
@@ -259,23 +347,27 @@ def installinstance():
                             if chunk:
                                 f.write(chunk)
                                 progressbar["value"] += len(chunk)
-            except BaseException as e:
-                print(e)
+            except BaseException:
+                liftFrameDown(console)
+                traceback.print_exc()
                 continue
             break
         progresstext["text"] = "Установка майнкрафта"
-        progressdesc["text"] = "Unpacking minecraft.zip"
-        progressbar["mode"] = "indeterminate"
-        progressbar.start()
-        with ZipFile(str(temp / "minecraft.zip"), "r") as z: z.extractall(config["instancedir"])
-        progressbar.stop()
-        progressbar["mode"] = "determinate"
-    if not os.path.exists(os.path.join(config["instancedir"], "mods")) or not os.listdir(os.path.join(config["instancedir"], "mods")):
+        with ZipFile(str(temp / "minecraft.zip"), "r") as z:
+            files = z.namelist()
+            progressbar["maximum"] = len(files)
+            progressbar["value"] = 0
+            for i, filename in enumerate(files):
+                z.extract(filename, config["instancedir"])
+                progressbar["value"] = i
+                progressdesc["text"] = f"Unpacking {filename}"
+                Window.update_idletasks()
+    if not os.path.exists(str(instanceFP / "mods")) or not os.listdir(str(instanceFP / "mods")):
         progresstext["text"] = "Установка модов"
         progressdesc["text"] = "Downloading mods.zip"
         while True:
             try:
-                with requests.get("http://155.212.208.63:5000/static/files/mods.zip", stream=True) as r:
+                with requests.get("https://drive.usercontent.google.com/download?confirm=t&id=1yx7EeZOsS_764YDznrGRQiO3uPqNhV8q&export=download", stream=True) as r:
                     r.raise_for_status()
                     progressbar["max"] = r.headers.get("Content-Length")
                     with open(str(temp / "mods.zip"), "wb") as f:
@@ -283,18 +375,21 @@ def installinstance():
                             if chunk:
                                 f.write(chunk)
                                 progressbar["value"] += len(chunk)
-            except BaseException as e:
-                print(e)
+            except BaseException:
+                liftFrameDown(console)
+                traceback.print_exc()
                 continue
             break
         progresstext["text"] = "Установка модов"
-        progressdesc["text"] = "Unpacking mods.zip"
-        progressbar["mode"] = "indeterminate"
-        progressbar.start()
-        with ZipFile(str(temp / "mods.zip"), "r") as z: z.extractall(config["instancedir"])
-        progressbar.stop()
-        progressbar["mode"] = "determinate"
-
+        with ZipFile(str(temp / "mods.zip"), "r") as z:
+            files = z.namelist()
+            progressbar["maximum"] = len(files)
+            progressbar["value"] = 0
+            for i, filename in enumerate(files):
+                z.extract(filename, config["instancedir"])
+                progressbar["value"] = i
+                progressdesc["text"] = f"Unpacking {filename}"
+                Window.update_idletasks()
 def launchinstance():
     print("Запуск \"Кварц 6\"")
     liftFrameDown(mcProgressframe)
@@ -302,8 +397,9 @@ def launchinstance():
     mainscreen.lift()
     liftFrameDown(console)
     consoles.select(1)
+    version = tomllib.loads((instanceFP / "version.txt").read_text())
     cmd = minecraft_launcher_lib.command.get_minecraft_command(
-        "1.20.1" if config["launchvanila"] else "1.20.1-forge-47.4.10",
+        version["mc_vanila"] if config["launchvanila"] else version["mc_core_version"],
         config["instancedir"],
         {
             "username": config["playernick"],
@@ -313,8 +409,9 @@ def launchinstance():
         }
     )
     if config["instancequickplay"]: cmd += ["--quickPlayMultiplayer", "kvaritcraft.mclan.ru"]
-    proc = subprocess.Popen(**{"args": cmd, "cwd": config["instancedir"], "stdout":subprocess.PIPE, "stderr":subprocess.STDOUT, "text": True,})
+    proc = subprocess.Popen(**{"args": cmd, "cwd": config["instancedir"], "stdout":subprocess.PIPE, "stderr":subprocess.STDOUT, "text": True, "errors":"replace",})
     mcstd = constd(mccon)
+    Window.update_idletasks()
     for line in proc.stdout: print(line, file=mcstd, end="")
 
 Window = Tk()
@@ -323,8 +420,9 @@ Window.attributes("-topmost", True)
 Window.geometry(f"1280x720+{Window.winfo_screenwidth()//2-640}+{Window.winfo_screenheight()//2-360}")
 Window.configure(background="#171716")
 TkAddon.SetupStyles(Window)
+Window.title(f"KvaritCraft launcher v.{VERSION}")
+Window.iconbitmap(True, os.path.join(SRC, "assets\\icon.ico"))
 Window.resizable(False, False)
-Window.overrideredirect(True)
 cap = cv2.VideoCapture(os.path.join(SRC, r"assets\splash.mp4"))
 ok, frame = cap.read()
 if not ok: showerror("A preload exception has been occurred", "Can't load splash screen")
@@ -332,18 +430,18 @@ h, w = frame.shape[:2]
 frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 img = Image.fromarray(frame_rgb)
 photo = ImageTk.PhotoImage(img)
-vidplayer = tkLabel(Window, image=photo, bd=0, bg="black")
+vidplayer = Label(Window, image=photo)
 vidplayer.image = photo
 vidplayer.pack(expand=True, fill="both")
 vidskip = False
 
 def vidnext():
-    global frame, cap, frame_rgb, img, photo, code
+    global frame, cap, frame_rgb, img, photo
     ok2, frame2 = cap.read()
     if not ok2 or vidskip:
         cap.release()
         vidplayer.destroy()
-        Window.after(0, mainloop)
+        Thread(target=mainloop, daemon=True).start()
         return
     frame_rgb = cv2.cvtColor(frame2, cv2.COLOR_BGR2RGB)
     img = Image.fromarray(frame_rgb)
@@ -360,6 +458,5 @@ def skipsplash(_):
 
 vidplayer.bind("<Button-1>", skipsplash)
 if config["playanimation"]: Window.after(0, vidnext)
-else: Window.after(0, mainloop)
+else: Thread(target=mainloop, daemon=True).start()
 Window.mainloop()
-sys.exit()
